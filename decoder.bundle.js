@@ -6537,771 +6537,6 @@ exports.VectorOperators = operators;
 
 /***/ }),
 
-/***/ "./node_modules/@here/harp-geometry/lib/ClipLineString.js":
-/*!****************************************************************!*\
-  !*** ./node_modules/@here/harp-geometry/lib/ClipLineString.js ***!
-  \****************************************************************/
-/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
-
-"use strict";
-
-/*
- * Copyright (C) 2020-2021 HERE Europe B.V.
- * Licensed under Apache 2.0, see full license in LICENSE
- * SPDX-License-Identifier: Apache-2.0
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.wrapLineString = exports.clipLineString = void 0;
-const harp_geoutils_1 = __webpack_require__(/*! @here/harp-geoutils */ "./node_modules/@here/harp-geoutils/index.js");
-const harp_utils_1 = __webpack_require__(/*! @here/harp-utils */ "./node_modules/@here/harp-utils/index.js");
-const three_1 = __webpack_require__(/*! three */ "three");
-/**
- * A clipping edge.
- *
- * @remarks
- * Clip lines using the Sutherland-Hodgman algorithm.
- *
- * @internal
- */
-class ClipEdge {
-    /**
-     * Creates a clipping edge.
-     *
-     * @param x1 - The x coordinate of the first point of this ClipEdge.
-     * @param y1 - The y coordinate of the first point of this ClipEdge.
-     * @param x2 - The x coordinate of the second point of this ClipEdge.
-     * @param y2 - The y coordinate of the second point of this ClipEdge.
-     * @param isInside - The function used to test points against this ClipEdge.
-     */
-    constructor(x1, y1, x2, y2, isInside) {
-        this.isInside = isInside;
-        this.p0 = new three_1.Vector2(x1, y1);
-        this.p1 = new three_1.Vector2(x2, y2);
-    }
-    /**
-     * Tests if the given point is inside this clipping edge.
-     */
-    inside(point) {
-        return this.isInside(point);
-    }
-    /**
-     * Computes the intersection of a line and this clipping edge.
-     *
-     * @remarks
-     * {@link https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
-     *    | line-line intersection}.
-     */
-    computeIntersection(a, b) {
-        const result = new three_1.Vector2();
-        harp_utils_1.Math2D.intersectLines(a.x, a.y, b.x, b.y, this.p0.x, this.p0.y, this.p1.x, this.p1.y, result);
-        return result;
-    }
-    /**
-     * Clip the input line against this edge.
-     */
-    clipLine(lineString) {
-        const inputList = lineString;
-        const result = [];
-        lineString = [];
-        result.push(lineString);
-        const pushPoint = (point) => {
-            if (lineString.length === 0 || !lineString[lineString.length - 1].equals(point)) {
-                lineString.push(point);
-            }
-        };
-        for (let i = 0; i < inputList.length; ++i) {
-            const currentPoint = inputList[i];
-            const prevPoint = i > 0 ? inputList[i - 1] : undefined;
-            if (this.inside(currentPoint)) {
-                if (prevPoint !== undefined && !this.inside(prevPoint)) {
-                    if (lineString.length > 0) {
-                        lineString = [];
-                        result.push(lineString);
-                    }
-                    pushPoint(this.computeIntersection(prevPoint, currentPoint));
-                }
-                pushPoint(currentPoint);
-            }
-            else if (prevPoint !== undefined && this.inside(prevPoint)) {
-                pushPoint(this.computeIntersection(prevPoint, currentPoint));
-            }
-        }
-        if (result[result.length - 1].length === 0) {
-            result.length = result.length - 1;
-        }
-        return result;
-    }
-    /**
-     * Clip the input lines against this edge.
-     */
-    clipLines(lineStrings) {
-        const reuslt = [];
-        lineStrings.forEach(lineString => {
-            this.clipLine(lineString).forEach(clippedLine => {
-                reuslt.push(clippedLine);
-            });
-        });
-        return reuslt;
-    }
-}
-/**
- * Clip the input line against the given bounds.
- *
- * @param lineString - The line to clip.
- * @param minX - The minimum x coordinate.
- * @param minY - The minimum y coordinate.
- * @param maxX - The maxumum x coordinate.
- * @param maxY - The maxumum y coordinate.
- */
-function clipLineString(lineString, minX, minY, maxX, maxY) {
-    const clipEdge0 = new ClipEdge(minX, minY, minX, maxY, p => p.x > minX); // left
-    const clipEdge1 = new ClipEdge(minX, maxY, maxX, maxY, p => p.y < maxY); // bottom
-    const clipEdge2 = new ClipEdge(maxX, maxY, maxX, minY, p => p.x < maxX); // right
-    const clipEdge3 = new ClipEdge(maxX, minY, minX, minY, p => p.y > minY); // top
-    let lines = clipEdge0.clipLine(lineString);
-    lines = clipEdge1.clipLines(lines);
-    lines = clipEdge2.clipLines(lines);
-    lines = clipEdge3.clipLines(lines);
-    return lines;
-}
-exports.clipLineString = clipLineString;
-/**
- * Helper function to wrap a line string projected in web mercator.
- *
- * @param multiLineString The input to wrap
- * @param edges The clipping edges used to wrap the input.
- * @param offset The x-offset used to displace the result
- *
- * @internal
- */
-function wrapMultiLineStringHelper(multiLineString, edges, offset) {
-    for (const clip of edges) {
-        multiLineString = clip.clipLines(multiLineString);
-    }
-    const worldP = new three_1.Vector3();
-    const coordinates = [];
-    multiLineString.forEach(lineString => {
-        if (lineString.length === 0) {
-            return;
-        }
-        const coords = lineString.map(({ x, y }) => {
-            worldP.set(x, y, 0);
-            const geoPoint = harp_geoutils_1.webMercatorProjection.unprojectPoint(worldP);
-            geoPoint.longitude += offset;
-            return geoPoint;
-        });
-        coordinates.push(coords);
-    });
-    return coordinates.length > 0 ? coordinates : undefined;
-}
-/**
- * Wrap the given line string.
- *
- * @remarks
- * This function splits this input line string in three parts.
- *
- * The `left` member of the result contains the part of the line string with longitude less than `-180`.
- *
- * The `middle` member contains the part of the line string with longitude in the range `[-180, 180]`.
- *
- * The `right` member contains the part of the line string with longitude greater than `180`.
- *
- * @param coordinates The coordinates of the line string to wrap.
- */
-function wrapLineString(coordinates) {
-    const worldP = new three_1.Vector3();
-    const lineString = coordinates.map(g => {
-        const { x, y } = harp_geoutils_1.webMercatorProjection.projectPoint(g, worldP);
-        return new three_1.Vector2(x, y);
-    });
-    const multiLineString = [lineString];
-    return {
-        left: wrapMultiLineStringHelper(multiLineString, WRAP_LEFT_CLIP_EDGES, 360),
-        middle: wrapMultiLineStringHelper(multiLineString, WRAP_MIDDLE_CLIP_EDGES, 0),
-        right: wrapMultiLineStringHelper(multiLineString, WRAP_RIGHT_CLIP_EDGES, -360)
-    };
-}
-exports.wrapLineString = wrapLineString;
-const ec = harp_geoutils_1.EarthConstants.EQUATORIAL_CIRCUMFERENCE;
-const border = 0;
-const WRAP_MIDDLE_CLIP_EDGES = [
-    new ClipEdge(0 - border, ec, 0 - border, 0, p => p.x > 0 - border),
-    new ClipEdge(ec + border, 0, ec + border, ec, p => p.x < ec + border)
-];
-const WRAP_LEFT_CLIP_EDGES = [
-    new ClipEdge(-ec - border, ec, -ec - border, 0, p => p.x > -ec - border),
-    new ClipEdge(0 + border, 0, 0 + border, ec, p => p.x < 0 + border)
-];
-const WRAP_RIGHT_CLIP_EDGES = [
-    new ClipEdge(ec - border, ec, ec - border, 0, p => p.x > ec - border),
-    new ClipEdge(ec * 2 + border, 0, ec * 2 + border, ec, p => p.x < ec * 2 + border)
-];
-//# sourceMappingURL=ClipLineString.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@here/harp-geometry/lib/ClipPolygon.js":
-/*!*************************************************************!*\
-  !*** ./node_modules/@here/harp-geometry/lib/ClipPolygon.js ***!
-  \*************************************************************/
-/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
-
-"use strict";
-
-/*
- * Copyright (C) 2020-2021 HERE Europe B.V.
- * Licensed under Apache 2.0, see full license in LICENSE
- * SPDX-License-Identifier: Apache-2.0
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.clipPolygon = exports.ClippingEdge = void 0;
-const three_1 = __webpack_require__(/*! three */ "three");
-/**
- * Abstract helper class used to implement the Sutherland-Hodgman clipping algorithm.
- *
- * @remarks
- * Concrete implementation of this class are used to clip a polygon
- * against one edge of a bounding box.
- *
- * @internal
- */
-class ClippingEdge {
-    /**
-     * Clip the polygon against this clipping edge.
-     *
-     * @param polygon Clip the polygon against this edge.
-     * @param extent The extent of the bounding box.
-     *
-     * @return The clipped polygon.
-     */
-    clipPolygon(polygon, extent) {
-        const inputList = polygon;
-        polygon = [];
-        const pushPoint = (point) => {
-            const lastAddedPoint = polygon[polygon.length - 1];
-            if (!(lastAddedPoint === null || lastAddedPoint === void 0 ? void 0 : lastAddedPoint.equals(point)) ||
-                (point.isClipped === true && !(lastAddedPoint === null || lastAddedPoint === void 0 ? void 0 : lastAddedPoint.isClipped)) ||
-                (!point.isClipped && (lastAddedPoint === null || lastAddedPoint === void 0 ? void 0 : lastAddedPoint.isClipped) === true)) {
-                polygon.push(point);
-            }
-        };
-        for (let i = 0; i < inputList.length; ++i) {
-            const currentPoint = inputList[i];
-            const prevPoint = inputList[(i + inputList.length - 1) % inputList.length];
-            if (this.inside(currentPoint, extent)) {
-                if (!this.inside(prevPoint, extent)) {
-                    const p = this.computeIntersection(prevPoint, currentPoint, extent);
-                    p.isClipped = true;
-                    pushPoint(p);
-                }
-                pushPoint(currentPoint);
-            }
-            else if (this.inside(prevPoint, extent)) {
-                const p = this.computeIntersection(prevPoint, currentPoint, extent);
-                p.isClipped = true;
-                pushPoint(p);
-            }
-        }
-        return polygon;
-    }
-}
-exports.ClippingEdge = ClippingEdge;
-class TopClippingEdge extends ClippingEdge {
-    /** @override */
-    inside(point) {
-        return point.y >= 0;
-    }
-    /**
-     * Computes the intersection of a line and this clipping edge.
-     *
-     * @remarks
-     * Find the intersection point between the line defined by the points `a` and `b`
-     * and the edge defined by the points `(0, 0)` and `(0, extent)`.
-     *
-     * @override
-     *
-     */
-    computeIntersection(a, b) {
-        const { x: x1, y: y1 } = a;
-        const { x: x2, y: y2 } = b;
-        const v = new three_1.Vector2((x1 * y2 - y1 * x2) / -(y1 - y2), 0).round();
-        return v;
-    }
-}
-class RightClippingEdge extends ClippingEdge {
-    /**
-     * @override
-     *
-     * See: HARP-14633, this should potentially be changed to < as it was previously.
-     * However further investigation is needed to confirm this.
-     */
-    inside(point, extent) {
-        return point.x <= extent;
-    }
-    /**
-     * Computes the intersection of a line and this clipping edge.
-     *
-     * @remarks
-     * Find the intersection point between the line defined by the points `a` and `b`
-     * and the edge defined by the points `(extent, 0)` and `(extent, extent)`.
-     *
-     * @override
-     *
-     */
-    computeIntersection(a, b, extent) {
-        const { x: x1, y: y1 } = a;
-        const { x: x2, y: y2 } = b;
-        const v = new three_1.Vector2(extent, (x1 * y2 - y1 * x2 - (y1 - y2) * -extent) / (x1 - x2)).round();
-        return v;
-    }
-}
-class BottomClipEdge extends ClippingEdge {
-    /** @override */
-    inside(point, extent) {
-        return point.y <= extent;
-    }
-    /**
-     * Computes the intersection of a line and this clipping edge.
-     *
-     * @remarks
-     * Find the intersection point between the line defined by the points `a` and `b`
-     * and the edge defined by the points `(extent, extent)` and `(0, extent)`.
-     *
-     * @override
-     *
-     */
-    computeIntersection(a, b, extent) {
-        const { x: x1, y: y1 } = a;
-        const { x: x2, y: y2 } = b;
-        const v = new three_1.Vector2((x1 * y2 - y1 * x2 - (x1 - x2) * extent) / -(y1 - y2), extent).round();
-        return v;
-    }
-}
-class LeftClippingEdge extends ClippingEdge {
-    /** @override */
-    inside(point) {
-        return point.x >= 0;
-    }
-    /**
-     * Computes the intersection of a line and this clipping edge.
-     *
-     * @remarks
-     * Find the intersection point between the line defined by the points `a` and `b`
-     * and the edge defined by the points `(0, extent)` and `(0, 0)`.
-     *
-     * @override
-     *
-     */
-    computeIntersection(a, b) {
-        const { x: x1, y: y1 } = a;
-        const { x: x2, y: y2 } = b;
-        const v = new three_1.Vector2(0, (x1 * y2 - y1 * x2) / (x1 - x2)).round();
-        return v;
-    }
-}
-const clipEdges = [
-    new TopClippingEdge(),
-    new RightClippingEdge(),
-    new BottomClipEdge(),
-    new LeftClippingEdge()
-];
-/**
- * Clip the given polygon against a rectangle using the Sutherland-Hodgman algorithm.
- *
- * @remarks
- * The coordinates of the polygon must be integer numbers.
- *
- * @param polygon The vertices of the polygon to clip.
- * @param extent The extents of the rectangle to clip against.
- */
-function clipPolygon(polygon, extent) {
-    if (polygon.length === 0) {
-        return polygon;
-    }
-    if (!polygon[0].equals(polygon[polygon.length - 1])) {
-        // close the polygon if needed.
-        polygon = [...polygon, polygon[0]];
-    }
-    for (const clip of clipEdges) {
-        polygon = clip.clipPolygon(polygon, extent);
-    }
-    if (polygon.length < 3) {
-        return [];
-    }
-    return polygon;
-}
-exports.clipPolygon = clipPolygon;
-//# sourceMappingURL=ClipPolygon.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@here/harp-geometry/lib/EdgeLengthGeometrySubdivisionModifier.js":
-/*!***************************************************************************************!*\
-  !*** ./node_modules/@here/harp-geometry/lib/EdgeLengthGeometrySubdivisionModifier.js ***!
-  \***************************************************************************************/
-/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
-
-"use strict";
-
-/*
- * Copyright (C) 2020-2021 HERE Europe B.V.
- * Licensed under Apache 2.0, see full license in LICENSE
- * SPDX-License-Identifier: Apache-2.0
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.EdgeLengthGeometrySubdivisionModifier = exports.SubdivisionMode = void 0;
-const harp_geoutils_1 = __webpack_require__(/*! @here/harp-geoutils */ "./node_modules/@here/harp-geoutils/index.js");
-const harp_utils_1 = __webpack_require__(/*! @here/harp-utils */ "./node_modules/@here/harp-utils/index.js");
-const three_1 = __webpack_require__(/*! three */ "three");
-const SubdivisionModifier_1 = __webpack_require__(/*! ./SubdivisionModifier */ "./node_modules/@here/harp-geometry/lib/SubdivisionModifier.js");
-const VERTEX_POSITION_CACHE = [new three_1.Vector3(), new three_1.Vector3()];
-var SubdivisionMode;
-(function (SubdivisionMode) {
-    /**
-     * Subdivide all edges
-     */
-    SubdivisionMode[SubdivisionMode["All"] = 0] = "All";
-    /**
-     * Only subdivide horizontal and vertical edges
-     */
-    SubdivisionMode[SubdivisionMode["NoDiagonals"] = 1] = "NoDiagonals";
-})(SubdivisionMode = exports.SubdivisionMode || (exports.SubdivisionMode = {}));
-/**
- * The [[EdgeLengthGeometrySubdivisionModifier]] subdivides triangle mesh depending on
- * length of edges.
- */
-class EdgeLengthGeometrySubdivisionModifier extends SubdivisionModifier_1.SubdivisionModifier {
-    /**
-     * Constructs a new [[EdgeLengthGeometrySubdivisionModifier]].
-     *
-     * @param subdivision - The subdivision factor
-     * @param geoBox - The geo bounding box of a tile
-     * @param subdivisionMode - Configures what edges to divide
-     * @param projection - The projection that defines the world space of this geometry.
-     */
-    constructor(subdivision, geoBox, subdivisionMode = SubdivisionMode.All, projection) {
-        super();
-        this.subdivision = subdivision;
-        this.geoBox = geoBox;
-        this.subdivisionMode = subdivisionMode;
-        this.projection = projection;
-        harp_utils_1.assert(projection.type === harp_geoutils_1.ProjectionType.Planar, "EdgeLengthGeometrySubdivisionModifier only supports planar projections");
-        const northEast = projection.projectPoint(geoBox.northEast, VERTEX_POSITION_CACHE[0]);
-        const southWest = projection.projectPoint(geoBox.southWest, VERTEX_POSITION_CACHE[1]);
-        this.m_projectedBox = {
-            min: {
-                x: Math.min(northEast.x, southWest.x),
-                y: Math.min(northEast.y, southWest.y),
-                z: Math.min(northEast.z, southWest.z)
-            },
-            max: {
-                x: Math.max(northEast.x, southWest.x),
-                y: Math.max(northEast.y, southWest.y),
-                z: Math.max(northEast.z, southWest.z)
-            }
-        };
-        this.m_maxLengthX = (this.m_projectedBox.max.x - this.m_projectedBox.min.x) / subdivision;
-        this.m_maxLengthY = (this.m_projectedBox.max.y - this.m_projectedBox.min.y) / subdivision;
-        // Increase max length slightly to account for precision errors
-        if (this.subdivisionMode === SubdivisionMode.All) {
-            this.m_maxLengthX *= 1.1;
-            this.m_maxLengthY *= 1.1;
-        }
-        this.m_maxLength = Math.sqrt(this.m_maxLengthX * this.m_maxLengthX + this.m_maxLengthY * this.m_maxLengthY);
-    }
-    /**
-     * Return upper bound for length of diagonal edges
-     */
-    get maxLength() {
-        return this.m_maxLength;
-    }
-    /**
-     * Return upper bound for edge length in x direction
-     */
-    get maxLengthX() {
-        return this.m_maxLengthX;
-    }
-    /**
-     * Return upper bound for edge length in y direction
-     */
-    get maxLengthY() {
-        return this.m_maxLengthY;
-    }
-    /** @override */
-    shouldSplitTriangle(a, b, c) {
-        const shouldSplitAB = this.shouldSplitEdge(a, b);
-        const shouldSplitBC = this.shouldSplitEdge(b, c);
-        const shouldSplitCA = this.shouldSplitEdge(c, a);
-        const shouldSplit = shouldSplitAB || shouldSplitBC || shouldSplitCA;
-        if (!shouldSplit) {
-            return;
-        }
-        const ab = a.distanceTo(b);
-        const bc = b.distanceTo(c);
-        const ca = c.distanceTo(a);
-        const maxDistance = Math.max(shouldSplitAB ? ab : 0, shouldSplitBC ? bc : 0, shouldSplitCA ? ca : 0);
-        if (ab === maxDistance) {
-            return 0;
-        }
-        else if (bc === maxDistance) {
-            return 1;
-        }
-        else if (ca === maxDistance) {
-            return 2;
-        }
-        throw new Error("Could not split triangle.");
-    }
-    shouldSplitEdge(a, b) {
-        switch (this.subdivisionMode) {
-            case SubdivisionMode.All:
-                return ((a.y === b.y && Math.abs(a.x - b.x) > this.m_maxLengthX) ||
-                    (a.x === b.x && Math.abs(a.y - b.y) > this.m_maxLengthY) ||
-                    a.distanceTo(b) > this.m_maxLength);
-            case SubdivisionMode.NoDiagonals:
-                return ((a.y === b.y && Math.abs(a.x - b.x) > this.m_maxLengthX) ||
-                    (a.x === b.x && Math.abs(a.y - b.y) > this.m_maxLengthY));
-        }
-    }
-}
-exports.EdgeLengthGeometrySubdivisionModifier = EdgeLengthGeometrySubdivisionModifier;
-//# sourceMappingURL=EdgeLengthGeometrySubdivisionModifier.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@here/harp-geometry/lib/SphericalGeometrySubdivisionModifier.js":
-/*!**************************************************************************************!*\
-  !*** ./node_modules/@here/harp-geometry/lib/SphericalGeometrySubdivisionModifier.js ***!
-  \**************************************************************************************/
-/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
-
-"use strict";
-
-/*
- * Copyright (C) 2019-2021 HERE Europe B.V.
- * Licensed under Apache 2.0, see full license in LICENSE
- * SPDX-License-Identifier: Apache-2.0
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SphericalGeometrySubdivisionModifier = void 0;
-const harp_geoutils_1 = __webpack_require__(/*! @here/harp-geoutils */ "./node_modules/@here/harp-geoutils/index.js");
-const three_1 = __webpack_require__(/*! three */ "three");
-const SubdivisionModifier_1 = __webpack_require__(/*! ./SubdivisionModifier */ "./node_modules/@here/harp-geometry/lib/SubdivisionModifier.js");
-const VERTEX_POSITION_CACHE = [new three_1.Vector3(), new three_1.Vector3(), new three_1.Vector3()];
-/**
- * The [[SphericalGeometrySubdivisionModifier]] subdivides triangle mesh geometries positioned
- * on the surface of a sphere centered at `(0, 0, 0)`.
- */
-class SphericalGeometrySubdivisionModifier extends SubdivisionModifier_1.SubdivisionModifier {
-    /**
-     * Constructs a new [[SphericalGeometrySubdivisionModifier]].
-     *
-     * @param angle - The maximum angle in radians between two vertices and the origin.
-     * @param projection - The projection that defines the world space of this geometry.
-     */
-    constructor(angle, projection = harp_geoutils_1.sphereProjection) {
-        super();
-        this.angle = angle;
-        this.projection = projection;
-    }
-    /** @override */
-    shouldSplitTriangle(a, b, c) {
-        const aa = harp_geoutils_1.sphereProjection.reprojectPoint(this.projection, a, VERTEX_POSITION_CACHE[0]);
-        const bb = harp_geoutils_1.sphereProjection.reprojectPoint(this.projection, b, VERTEX_POSITION_CACHE[1]);
-        const cc = harp_geoutils_1.sphereProjection.reprojectPoint(this.projection, c, VERTEX_POSITION_CACHE[2]);
-        const alpha = aa.angleTo(bb);
-        const beta = bb.angleTo(cc);
-        const gamma = cc.angleTo(aa);
-        // find the maximum angle
-        const m = Math.max(alpha, Math.max(beta, gamma));
-        // split the triangle if needed.
-        if (m < this.angle) {
-            return undefined;
-        }
-        if (m === alpha) {
-            return 0;
-        }
-        else if (m === beta) {
-            return 1;
-        }
-        else if (m === gamma) {
-            return 2;
-        }
-        throw new Error("failed to split triangle");
-    }
-}
-exports.SphericalGeometrySubdivisionModifier = SphericalGeometrySubdivisionModifier;
-//# sourceMappingURL=SphericalGeometrySubdivisionModifier.js.map
-
-/***/ }),
-
-/***/ "./node_modules/@here/harp-geometry/lib/SubdivisionModifier.js":
-/*!*********************************************************************!*\
-  !*** ./node_modules/@here/harp-geometry/lib/SubdivisionModifier.js ***!
-  \*********************************************************************/
-/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
-
-"use strict";
-
-/*
- * Copyright (C) 2019-2021 HERE Europe B.V.
- * Licensed under Apache 2.0, see full license in LICENSE
- * SPDX-License-Identifier: Apache-2.0
- */
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.SubdivisionModifier = void 0;
-const three_1 = __webpack_require__(/*! three */ "three");
-const tmpVectorA = new three_1.Vector3();
-const tmpVectorB = new three_1.Vector3();
-const tmpVectorC = new three_1.Vector3();
-/**
- * The [[SubdivisionModifier]] subdivides triangle mesh geometries.
- */
-class SubdivisionModifier {
-    /**
-     * Constructs a new [[SubdivisionModifier]].
-     */
-    constructor() {
-        // nothing to do
-    }
-    /**
-     * Subdivides the faces of the given [[THREE.BufferGeometry]].
-     *
-     * This method modifies (in-place) the vertices and the faces of the geometry.
-     * Please note that only the vertex position and their UV coordinates are subdivided.
-     * Normals, vertex colors and other attributes are left unmodified.
-     *
-     * @param geometry - The [[THREE.BufferGeometry]] to subdivide.
-     */
-    modify(geometry) {
-        const positionAttr = geometry.getAttribute("position");
-        const position = Array.from(positionAttr.array);
-        const uvAttr = geometry.getAttribute("uv");
-        const uv = uvAttr !== undefined ? Array.from(uvAttr.array) : undefined;
-        const edgeAttr = geometry.getAttribute("edge");
-        const edge = edgeAttr !== undefined ? Array.from(edgeAttr.array) : undefined;
-        const wallAttr = geometry.getAttribute("wall");
-        const wall = wallAttr !== undefined ? Array.from(wallAttr.array) : undefined;
-        const indexAttr = geometry.getIndex();
-        const indices = Array.from(indexAttr.array);
-        // A cache containing the indices of the vertices added
-        // when subdiving the faces of the geometry.
-        const cache = new Map();
-        /**
-         * Returns the index of the vertex positioned in the middle of the given vertices.
-         */
-        function middleVertex(i, j) {
-            // Build a unique `key` for the pair of indices `(i, j)`.
-            const key = `${Math.min(i, j)}_${Math.max(i, j)}`;
-            const h = cache.get(key);
-            if (h !== undefined) {
-                // Nothing to do, a vertex in the middle of (i, j) was already created.
-                return h;
-            }
-            // The position of the new vertex.
-            tmpVectorA.set(position[i * 3], position[i * 3 + 1], position[i * 3 + 2]);
-            tmpVectorB.set(position[j * 3], position[j * 3 + 1], position[j * 3 + 2]);
-            tmpVectorC.lerpVectors(tmpVectorA, tmpVectorB, 0.5);
-            // The index of the new vertex.
-            const index = position.length / 3;
-            position.push(...tmpVectorC.toArray());
-            // Cache the position of the new vertex.
-            cache.set(key, index);
-            // The uvs of the new vertex.
-            if (uv !== undefined) {
-                tmpVectorA.set(uv[i * 2], uv[i * 2 + 1], 0);
-                tmpVectorB.set(uv[j * 2], uv[j * 2 + 1], 0);
-                tmpVectorC.lerpVectors(tmpVectorA, tmpVectorB, 0.5);
-                uv.push(tmpVectorC.x, tmpVectorC.y);
-            }
-            // The edge and wall attributes of the new vertex.
-            // If a new vertex has been introduced between i and j, connect the elements
-            // accordingly.
-            if (edge !== undefined) {
-                if (edge[i] === j) {
-                    edge.push(j);
-                    edge[i] = index;
-                }
-                else if (edge[j] === i) {
-                    edge.push(i);
-                    edge[j] = index;
-                }
-                else {
-                    edge.push(-1);
-                }
-            }
-            if (wall !== undefined) {
-                if (wall[i] === j) {
-                    wall.push(j);
-                    wall[i] = index;
-                }
-                else if (wall[j] === i) {
-                    wall.push(i);
-                    wall[j] = index;
-                }
-                else {
-                    wall.push(-1);
-                }
-            }
-            return index;
-        }
-        const newIndices = [];
-        while (indices.length >= 3) {
-            const v0 = indices.shift();
-            const v1 = indices.shift();
-            const v2 = indices.shift();
-            tmpVectorA.set(position[v0 * 3], position[v0 * 3 + 1], position[v0 * 3 + 2]);
-            tmpVectorB.set(position[v1 * 3], position[v1 * 3 + 1], position[v1 * 3 + 2]);
-            tmpVectorC.set(position[v2 * 3], position[v2 * 3 + 1], position[v2 * 3 + 2]);
-            const edgeToSplit = this.shouldSplitTriangle(tmpVectorA, tmpVectorB, tmpVectorC);
-            switch (edgeToSplit) {
-                case 0: {
-                    const v3 = middleVertex(v0, v1);
-                    indices.push(v0, v3, v2, v3, v1, v2);
-                    break;
-                }
-                case 1: {
-                    const v3 = middleVertex(v1, v2);
-                    indices.push(v0, v1, v3, v0, v3, v2);
-                    break;
-                }
-                case 2: {
-                    const v3 = middleVertex(v2, v0);
-                    indices.push(v0, v1, v3, v3, v1, v2);
-                    break;
-                }
-                case undefined: {
-                    newIndices.push(v0, v1, v2);
-                    break;
-                }
-                default:
-                    throw new Error("failed to subdivide the given geometry");
-            }
-        }
-        positionAttr.array =
-            positionAttr.array instanceof Float32Array
-                ? new Float32Array(position)
-                : new Float64Array(position);
-        positionAttr.count = position.length / positionAttr.itemSize;
-        positionAttr.needsUpdate = true;
-        geometry.setIndex(newIndices);
-        if (uv !== undefined) {
-            uvAttr.array = new Float32Array(uv);
-            uvAttr.count = uv.length / uvAttr.itemSize;
-            uvAttr.needsUpdate = true;
-        }
-        if (edge !== undefined) {
-            edgeAttr.array = new Float32Array(edge);
-            edgeAttr.count = edge.length / edgeAttr.itemSize;
-            edgeAttr.needsUpdate = true;
-        }
-        return geometry;
-    }
-}
-exports.SubdivisionModifier = SubdivisionModifier;
-//# sourceMappingURL=SubdivisionModifier.js.map
-
-/***/ }),
-
 /***/ "./node_modules/@here/harp-geoutils/index.js":
 /*!***************************************************!*\
   !*** ./node_modules/@here/harp-geoutils/index.js ***!
@@ -15978,9 +15213,9 @@ exports.VectorTileDataEmitter = void 0;
  */
 const harp_datasource_protocol_1 = __webpack_require__(/*! @here/harp-datasource-protocol */ "./node_modules/@here/harp-datasource-protocol/index.js");
 const TechniqueAttr_1 = __webpack_require__(/*! @here/harp-datasource-protocol/lib/TechniqueAttr */ "./node_modules/@here/harp-datasource-protocol/lib/TechniqueAttr.js");
-const ClipPolygon_1 = __webpack_require__(/*! @here/harp-geometry/lib/ClipPolygon */ "./node_modules/@here/harp-geometry/lib/ClipPolygon.js");
-const EdgeLengthGeometrySubdivisionModifier_1 = __webpack_require__(/*! @here/harp-geometry/lib/EdgeLengthGeometrySubdivisionModifier */ "./node_modules/@here/harp-geometry/lib/EdgeLengthGeometrySubdivisionModifier.js");
-const SphericalGeometrySubdivisionModifier_1 = __webpack_require__(/*! @here/harp-geometry/lib/SphericalGeometrySubdivisionModifier */ "./node_modules/@here/harp-geometry/lib/SphericalGeometrySubdivisionModifier.js");
+const ClipPolygon_1 = __webpack_require__(/*! @here/harp-geometry/lib/ClipPolygon */ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/ClipPolygon.js");
+const EdgeLengthGeometrySubdivisionModifier_1 = __webpack_require__(/*! @here/harp-geometry/lib/EdgeLengthGeometrySubdivisionModifier */ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/EdgeLengthGeometrySubdivisionModifier.js");
+const SphericalGeometrySubdivisionModifier_1 = __webpack_require__(/*! @here/harp-geometry/lib/SphericalGeometrySubdivisionModifier */ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/SphericalGeometrySubdivisionModifier.js");
 const harp_geoutils_1 = __webpack_require__(/*! @here/harp-geoutils */ "./node_modules/@here/harp-geoutils/index.js");
 const Lines_1 = __webpack_require__(/*! @here/harp-lines/lib/Lines */ "./node_modules/@here/harp-lines/lib/Lines.js");
 const TriangulateLines_1 = __webpack_require__(/*! @here/harp-lines/lib/TriangulateLines */ "./node_modules/@here/harp-lines/lib/TriangulateLines.js");
@@ -17778,7 +17013,7 @@ exports.GeoJsonVtDataAdapter = GeoJsonVtDataAdapter;
  */
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.GeoJsonDataAdapter = void 0;
-const ClipLineString_1 = __webpack_require__(/*! @here/harp-geometry/lib/ClipLineString */ "./node_modules/@here/harp-geometry/lib/ClipLineString.js");
+const ClipLineString_1 = __webpack_require__(/*! @here/harp-geometry/lib/ClipLineString */ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/ClipLineString.js");
 const harp_geoutils_1 = __webpack_require__(/*! @here/harp-geoutils */ "./node_modules/@here/harp-geoutils/index.js");
 const three_1 = __webpack_require__(/*! three */ "three");
 const OmvUtils_1 = __webpack_require__(/*! ../../OmvUtils */ "./node_modules/@here/harp-vectortile-datasource/lib/OmvUtils.js");
@@ -19492,6 +18727,771 @@ $root.com = (function() {
 
 module.exports = $root;
 
+
+/***/ }),
+
+/***/ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/ClipLineString.js":
+/*!**************************************************************************************************************!*\
+  !*** ./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/ClipLineString.js ***!
+  \**************************************************************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+/*
+ * Copyright (C) 2020-2021 HERE Europe B.V.
+ * Licensed under Apache 2.0, see full license in LICENSE
+ * SPDX-License-Identifier: Apache-2.0
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.wrapLineString = exports.clipLineString = void 0;
+const harp_geoutils_1 = __webpack_require__(/*! @here/harp-geoutils */ "./node_modules/@here/harp-geoutils/index.js");
+const harp_utils_1 = __webpack_require__(/*! @here/harp-utils */ "./node_modules/@here/harp-utils/index.js");
+const three_1 = __webpack_require__(/*! three */ "three");
+/**
+ * A clipping edge.
+ *
+ * @remarks
+ * Clip lines using the Sutherland-Hodgman algorithm.
+ *
+ * @internal
+ */
+class ClipEdge {
+    /**
+     * Creates a clipping edge.
+     *
+     * @param x1 - The x coordinate of the first point of this ClipEdge.
+     * @param y1 - The y coordinate of the first point of this ClipEdge.
+     * @param x2 - The x coordinate of the second point of this ClipEdge.
+     * @param y2 - The y coordinate of the second point of this ClipEdge.
+     * @param isInside - The function used to test points against this ClipEdge.
+     */
+    constructor(x1, y1, x2, y2, isInside) {
+        this.isInside = isInside;
+        this.p0 = new three_1.Vector2(x1, y1);
+        this.p1 = new three_1.Vector2(x2, y2);
+    }
+    /**
+     * Tests if the given point is inside this clipping edge.
+     */
+    inside(point) {
+        return this.isInside(point);
+    }
+    /**
+     * Computes the intersection of a line and this clipping edge.
+     *
+     * @remarks
+     * {@link https://en.wikipedia.org/wiki/Line%E2%80%93line_intersection
+     *    | line-line intersection}.
+     */
+    computeIntersection(a, b) {
+        const result = new three_1.Vector2();
+        harp_utils_1.Math2D.intersectLines(a.x, a.y, b.x, b.y, this.p0.x, this.p0.y, this.p1.x, this.p1.y, result);
+        return result;
+    }
+    /**
+     * Clip the input line against this edge.
+     */
+    clipLine(lineString) {
+        const inputList = lineString;
+        const result = [];
+        lineString = [];
+        result.push(lineString);
+        const pushPoint = (point) => {
+            if (lineString.length === 0 || !lineString[lineString.length - 1].equals(point)) {
+                lineString.push(point);
+            }
+        };
+        for (let i = 0; i < inputList.length; ++i) {
+            const currentPoint = inputList[i];
+            const prevPoint = i > 0 ? inputList[i - 1] : undefined;
+            if (this.inside(currentPoint)) {
+                if (prevPoint !== undefined && !this.inside(prevPoint)) {
+                    if (lineString.length > 0) {
+                        lineString = [];
+                        result.push(lineString);
+                    }
+                    pushPoint(this.computeIntersection(prevPoint, currentPoint));
+                }
+                pushPoint(currentPoint);
+            }
+            else if (prevPoint !== undefined && this.inside(prevPoint)) {
+                pushPoint(this.computeIntersection(prevPoint, currentPoint));
+            }
+        }
+        if (result[result.length - 1].length === 0) {
+            result.length = result.length - 1;
+        }
+        return result;
+    }
+    /**
+     * Clip the input lines against this edge.
+     */
+    clipLines(lineStrings) {
+        const reuslt = [];
+        lineStrings.forEach(lineString => {
+            this.clipLine(lineString).forEach(clippedLine => {
+                reuslt.push(clippedLine);
+            });
+        });
+        return reuslt;
+    }
+}
+/**
+ * Clip the input line against the given bounds.
+ *
+ * @param lineString - The line to clip.
+ * @param minX - The minimum x coordinate.
+ * @param minY - The minimum y coordinate.
+ * @param maxX - The maxumum x coordinate.
+ * @param maxY - The maxumum y coordinate.
+ */
+function clipLineString(lineString, minX, minY, maxX, maxY) {
+    const clipEdge0 = new ClipEdge(minX, minY, minX, maxY, p => p.x > minX); // left
+    const clipEdge1 = new ClipEdge(minX, maxY, maxX, maxY, p => p.y < maxY); // bottom
+    const clipEdge2 = new ClipEdge(maxX, maxY, maxX, minY, p => p.x < maxX); // right
+    const clipEdge3 = new ClipEdge(maxX, minY, minX, minY, p => p.y > minY); // top
+    let lines = clipEdge0.clipLine(lineString);
+    lines = clipEdge1.clipLines(lines);
+    lines = clipEdge2.clipLines(lines);
+    lines = clipEdge3.clipLines(lines);
+    return lines;
+}
+exports.clipLineString = clipLineString;
+/**
+ * Helper function to wrap a line string projected in web mercator.
+ *
+ * @param multiLineString The input to wrap
+ * @param edges The clipping edges used to wrap the input.
+ * @param offset The x-offset used to displace the result
+ *
+ * @internal
+ */
+function wrapMultiLineStringHelper(multiLineString, edges, offset) {
+    for (const clip of edges) {
+        multiLineString = clip.clipLines(multiLineString);
+    }
+    const worldP = new three_1.Vector3();
+    const coordinates = [];
+    multiLineString.forEach(lineString => {
+        if (lineString.length === 0) {
+            return;
+        }
+        const coords = lineString.map(({ x, y }) => {
+            worldP.set(x, y, 0);
+            const geoPoint = harp_geoutils_1.webMercatorProjection.unprojectPoint(worldP);
+            geoPoint.longitude += offset;
+            return geoPoint;
+        });
+        coordinates.push(coords);
+    });
+    return coordinates.length > 0 ? coordinates : undefined;
+}
+/**
+ * Wrap the given line string.
+ *
+ * @remarks
+ * This function splits this input line string in three parts.
+ *
+ * The `left` member of the result contains the part of the line string with longitude less than `-180`.
+ *
+ * The `middle` member contains the part of the line string with longitude in the range `[-180, 180]`.
+ *
+ * The `right` member contains the part of the line string with longitude greater than `180`.
+ *
+ * @param coordinates The coordinates of the line string to wrap.
+ */
+function wrapLineString(coordinates) {
+    const worldP = new three_1.Vector3();
+    const lineString = coordinates.map(g => {
+        const { x, y } = harp_geoutils_1.webMercatorProjection.projectPoint(g, worldP);
+        return new three_1.Vector2(x, y);
+    });
+    const multiLineString = [lineString];
+    return {
+        left: wrapMultiLineStringHelper(multiLineString, WRAP_LEFT_CLIP_EDGES, 360),
+        middle: wrapMultiLineStringHelper(multiLineString, WRAP_MIDDLE_CLIP_EDGES, 0),
+        right: wrapMultiLineStringHelper(multiLineString, WRAP_RIGHT_CLIP_EDGES, -360)
+    };
+}
+exports.wrapLineString = wrapLineString;
+const ec = harp_geoutils_1.EarthConstants.EQUATORIAL_CIRCUMFERENCE;
+const border = 0;
+const WRAP_MIDDLE_CLIP_EDGES = [
+    new ClipEdge(0 - border, ec, 0 - border, 0, p => p.x > 0 - border),
+    new ClipEdge(ec + border, 0, ec + border, ec, p => p.x < ec + border)
+];
+const WRAP_LEFT_CLIP_EDGES = [
+    new ClipEdge(-ec - border, ec, -ec - border, 0, p => p.x > -ec - border),
+    new ClipEdge(0 + border, 0, 0 + border, ec, p => p.x < 0 + border)
+];
+const WRAP_RIGHT_CLIP_EDGES = [
+    new ClipEdge(ec - border, ec, ec - border, 0, p => p.x > ec - border),
+    new ClipEdge(ec * 2 + border, 0, ec * 2 + border, ec, p => p.x < ec * 2 + border)
+];
+//# sourceMappingURL=ClipLineString.js.map
+
+/***/ }),
+
+/***/ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/ClipPolygon.js":
+/*!***********************************************************************************************************!*\
+  !*** ./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/ClipPolygon.js ***!
+  \***********************************************************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+/*
+ * Copyright (C) 2020-2021 HERE Europe B.V.
+ * Licensed under Apache 2.0, see full license in LICENSE
+ * SPDX-License-Identifier: Apache-2.0
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.clipPolygon = exports.ClippingEdge = void 0;
+const three_1 = __webpack_require__(/*! three */ "three");
+/**
+ * Abstract helper class used to implement the Sutherland-Hodgman clipping algorithm.
+ *
+ * @remarks
+ * Concrete implementation of this class are used to clip a polygon
+ * against one edge of a bounding box.
+ *
+ * @internal
+ */
+class ClippingEdge {
+    /**
+     * Clip the polygon against this clipping edge.
+     *
+     * @param polygon Clip the polygon against this edge.
+     * @param extent The extent of the bounding box.
+     *
+     * @return The clipped polygon.
+     */
+    clipPolygon(polygon, extent) {
+        const inputList = polygon;
+        polygon = [];
+        const pushPoint = (point) => {
+            const lastAddedPoint = polygon[polygon.length - 1];
+            if (!(lastAddedPoint === null || lastAddedPoint === void 0 ? void 0 : lastAddedPoint.equals(point)) ||
+                (point.isClipped === true && !(lastAddedPoint === null || lastAddedPoint === void 0 ? void 0 : lastAddedPoint.isClipped)) ||
+                (!point.isClipped && (lastAddedPoint === null || lastAddedPoint === void 0 ? void 0 : lastAddedPoint.isClipped) === true)) {
+                polygon.push(point);
+            }
+        };
+        for (let i = 0; i < inputList.length; ++i) {
+            const currentPoint = inputList[i];
+            const prevPoint = inputList[(i + inputList.length - 1) % inputList.length];
+            if (this.inside(currentPoint, extent)) {
+                if (!this.inside(prevPoint, extent)) {
+                    const p = this.computeIntersection(prevPoint, currentPoint, extent);
+                    p.isClipped = true;
+                    pushPoint(p);
+                }
+                pushPoint(currentPoint);
+            }
+            else if (this.inside(prevPoint, extent)) {
+                const p = this.computeIntersection(prevPoint, currentPoint, extent);
+                p.isClipped = true;
+                pushPoint(p);
+            }
+        }
+        return polygon;
+    }
+}
+exports.ClippingEdge = ClippingEdge;
+class TopClippingEdge extends ClippingEdge {
+    /** @override */
+    inside(point) {
+        return point.y >= 0;
+    }
+    /**
+     * Computes the intersection of a line and this clipping edge.
+     *
+     * @remarks
+     * Find the intersection point between the line defined by the points `a` and `b`
+     * and the edge defined by the points `(0, 0)` and `(0, extent)`.
+     *
+     * @override
+     *
+     */
+    computeIntersection(a, b) {
+        const { x: x1, y: y1 } = a;
+        const { x: x2, y: y2 } = b;
+        const v = new three_1.Vector2((x1 * y2 - y1 * x2) / -(y1 - y2), 0).round();
+        return v;
+    }
+}
+class RightClippingEdge extends ClippingEdge {
+    /**
+     * @override
+     *
+     * See: HARP-14633, this should potentially be changed to < as it was previously.
+     * However further investigation is needed to confirm this.
+     */
+    inside(point, extent) {
+        return point.x <= extent;
+    }
+    /**
+     * Computes the intersection of a line and this clipping edge.
+     *
+     * @remarks
+     * Find the intersection point between the line defined by the points `a` and `b`
+     * and the edge defined by the points `(extent, 0)` and `(extent, extent)`.
+     *
+     * @override
+     *
+     */
+    computeIntersection(a, b, extent) {
+        const { x: x1, y: y1 } = a;
+        const { x: x2, y: y2 } = b;
+        const v = new three_1.Vector2(extent, (x1 * y2 - y1 * x2 - (y1 - y2) * -extent) / (x1 - x2)).round();
+        return v;
+    }
+}
+class BottomClipEdge extends ClippingEdge {
+    /** @override */
+    inside(point, extent) {
+        return point.y <= extent;
+    }
+    /**
+     * Computes the intersection of a line and this clipping edge.
+     *
+     * @remarks
+     * Find the intersection point between the line defined by the points `a` and `b`
+     * and the edge defined by the points `(extent, extent)` and `(0, extent)`.
+     *
+     * @override
+     *
+     */
+    computeIntersection(a, b, extent) {
+        const { x: x1, y: y1 } = a;
+        const { x: x2, y: y2 } = b;
+        const v = new three_1.Vector2((x1 * y2 - y1 * x2 - (x1 - x2) * extent) / -(y1 - y2), extent).round();
+        return v;
+    }
+}
+class LeftClippingEdge extends ClippingEdge {
+    /** @override */
+    inside(point) {
+        return point.x >= 0;
+    }
+    /**
+     * Computes the intersection of a line and this clipping edge.
+     *
+     * @remarks
+     * Find the intersection point between the line defined by the points `a` and `b`
+     * and the edge defined by the points `(0, extent)` and `(0, 0)`.
+     *
+     * @override
+     *
+     */
+    computeIntersection(a, b) {
+        const { x: x1, y: y1 } = a;
+        const { x: x2, y: y2 } = b;
+        const v = new three_1.Vector2(0, (x1 * y2 - y1 * x2) / (x1 - x2)).round();
+        return v;
+    }
+}
+const clipEdges = [
+    new TopClippingEdge(),
+    new RightClippingEdge(),
+    new BottomClipEdge(),
+    new LeftClippingEdge()
+];
+/**
+ * Clip the given polygon against a rectangle using the Sutherland-Hodgman algorithm.
+ *
+ * @remarks
+ * The coordinates of the polygon must be integer numbers.
+ *
+ * @param polygon The vertices of the polygon to clip.
+ * @param extent The extents of the rectangle to clip against.
+ */
+function clipPolygon(polygon, extent) {
+    if (polygon.length === 0) {
+        return polygon;
+    }
+    if (!polygon[0].equals(polygon[polygon.length - 1])) {
+        // close the polygon if needed.
+        polygon = [...polygon, polygon[0]];
+    }
+    for (const clip of clipEdges) {
+        polygon = clip.clipPolygon(polygon, extent);
+    }
+    if (polygon.length < 3) {
+        return [];
+    }
+    return polygon;
+}
+exports.clipPolygon = clipPolygon;
+//# sourceMappingURL=ClipPolygon.js.map
+
+/***/ }),
+
+/***/ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/EdgeLengthGeometrySubdivisionModifier.js":
+/*!*************************************************************************************************************************************!*\
+  !*** ./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/EdgeLengthGeometrySubdivisionModifier.js ***!
+  \*************************************************************************************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+/*
+ * Copyright (C) 2020-2021 HERE Europe B.V.
+ * Licensed under Apache 2.0, see full license in LICENSE
+ * SPDX-License-Identifier: Apache-2.0
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.EdgeLengthGeometrySubdivisionModifier = exports.SubdivisionMode = void 0;
+const harp_geoutils_1 = __webpack_require__(/*! @here/harp-geoutils */ "./node_modules/@here/harp-geoutils/index.js");
+const harp_utils_1 = __webpack_require__(/*! @here/harp-utils */ "./node_modules/@here/harp-utils/index.js");
+const three_1 = __webpack_require__(/*! three */ "three");
+const SubdivisionModifier_1 = __webpack_require__(/*! ./SubdivisionModifier */ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/SubdivisionModifier.js");
+const VERTEX_POSITION_CACHE = [new three_1.Vector3(), new three_1.Vector3()];
+var SubdivisionMode;
+(function (SubdivisionMode) {
+    /**
+     * Subdivide all edges
+     */
+    SubdivisionMode[SubdivisionMode["All"] = 0] = "All";
+    /**
+     * Only subdivide horizontal and vertical edges
+     */
+    SubdivisionMode[SubdivisionMode["NoDiagonals"] = 1] = "NoDiagonals";
+})(SubdivisionMode = exports.SubdivisionMode || (exports.SubdivisionMode = {}));
+/**
+ * The [[EdgeLengthGeometrySubdivisionModifier]] subdivides triangle mesh depending on
+ * length of edges.
+ */
+class EdgeLengthGeometrySubdivisionModifier extends SubdivisionModifier_1.SubdivisionModifier {
+    /**
+     * Constructs a new [[EdgeLengthGeometrySubdivisionModifier]].
+     *
+     * @param subdivision - The subdivision factor
+     * @param geoBox - The geo bounding box of a tile
+     * @param subdivisionMode - Configures what edges to divide
+     * @param projection - The projection that defines the world space of this geometry.
+     */
+    constructor(subdivision, geoBox, subdivisionMode = SubdivisionMode.All, projection) {
+        super();
+        this.subdivision = subdivision;
+        this.geoBox = geoBox;
+        this.subdivisionMode = subdivisionMode;
+        this.projection = projection;
+        harp_utils_1.assert(projection.type === harp_geoutils_1.ProjectionType.Planar, "EdgeLengthGeometrySubdivisionModifier only supports planar projections");
+        const northEast = projection.projectPoint(geoBox.northEast, VERTEX_POSITION_CACHE[0]);
+        const southWest = projection.projectPoint(geoBox.southWest, VERTEX_POSITION_CACHE[1]);
+        this.m_projectedBox = {
+            min: {
+                x: Math.min(northEast.x, southWest.x),
+                y: Math.min(northEast.y, southWest.y),
+                z: Math.min(northEast.z, southWest.z)
+            },
+            max: {
+                x: Math.max(northEast.x, southWest.x),
+                y: Math.max(northEast.y, southWest.y),
+                z: Math.max(northEast.z, southWest.z)
+            }
+        };
+        this.m_maxLengthX = (this.m_projectedBox.max.x - this.m_projectedBox.min.x) / subdivision;
+        this.m_maxLengthY = (this.m_projectedBox.max.y - this.m_projectedBox.min.y) / subdivision;
+        // Increase max length slightly to account for precision errors
+        if (this.subdivisionMode === SubdivisionMode.All) {
+            this.m_maxLengthX *= 1.1;
+            this.m_maxLengthY *= 1.1;
+        }
+        this.m_maxLength = Math.sqrt(this.m_maxLengthX * this.m_maxLengthX + this.m_maxLengthY * this.m_maxLengthY);
+    }
+    /**
+     * Return upper bound for length of diagonal edges
+     */
+    get maxLength() {
+        return this.m_maxLength;
+    }
+    /**
+     * Return upper bound for edge length in x direction
+     */
+    get maxLengthX() {
+        return this.m_maxLengthX;
+    }
+    /**
+     * Return upper bound for edge length in y direction
+     */
+    get maxLengthY() {
+        return this.m_maxLengthY;
+    }
+    /** @override */
+    shouldSplitTriangle(a, b, c) {
+        const shouldSplitAB = this.shouldSplitEdge(a, b);
+        const shouldSplitBC = this.shouldSplitEdge(b, c);
+        const shouldSplitCA = this.shouldSplitEdge(c, a);
+        const shouldSplit = shouldSplitAB || shouldSplitBC || shouldSplitCA;
+        if (!shouldSplit) {
+            return;
+        }
+        const ab = a.distanceTo(b);
+        const bc = b.distanceTo(c);
+        const ca = c.distanceTo(a);
+        const maxDistance = Math.max(shouldSplitAB ? ab : 0, shouldSplitBC ? bc : 0, shouldSplitCA ? ca : 0);
+        if (ab === maxDistance) {
+            return 0;
+        }
+        else if (bc === maxDistance) {
+            return 1;
+        }
+        else if (ca === maxDistance) {
+            return 2;
+        }
+        throw new Error("Could not split triangle.");
+    }
+    shouldSplitEdge(a, b) {
+        switch (this.subdivisionMode) {
+            case SubdivisionMode.All:
+                return ((a.y === b.y && Math.abs(a.x - b.x) > this.m_maxLengthX) ||
+                    (a.x === b.x && Math.abs(a.y - b.y) > this.m_maxLengthY) ||
+                    a.distanceTo(b) > this.m_maxLength);
+            case SubdivisionMode.NoDiagonals:
+                return ((a.y === b.y && Math.abs(a.x - b.x) > this.m_maxLengthX) ||
+                    (a.x === b.x && Math.abs(a.y - b.y) > this.m_maxLengthY));
+        }
+    }
+}
+exports.EdgeLengthGeometrySubdivisionModifier = EdgeLengthGeometrySubdivisionModifier;
+//# sourceMappingURL=EdgeLengthGeometrySubdivisionModifier.js.map
+
+/***/ }),
+
+/***/ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/SphericalGeometrySubdivisionModifier.js":
+/*!************************************************************************************************************************************!*\
+  !*** ./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/SphericalGeometrySubdivisionModifier.js ***!
+  \************************************************************************************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+/*
+ * Copyright (C) 2019-2021 HERE Europe B.V.
+ * Licensed under Apache 2.0, see full license in LICENSE
+ * SPDX-License-Identifier: Apache-2.0
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SphericalGeometrySubdivisionModifier = void 0;
+const harp_geoutils_1 = __webpack_require__(/*! @here/harp-geoutils */ "./node_modules/@here/harp-geoutils/index.js");
+const three_1 = __webpack_require__(/*! three */ "three");
+const SubdivisionModifier_1 = __webpack_require__(/*! ./SubdivisionModifier */ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/SubdivisionModifier.js");
+const VERTEX_POSITION_CACHE = [new three_1.Vector3(), new three_1.Vector3(), new three_1.Vector3()];
+/**
+ * The [[SphericalGeometrySubdivisionModifier]] subdivides triangle mesh geometries positioned
+ * on the surface of a sphere centered at `(0, 0, 0)`.
+ */
+class SphericalGeometrySubdivisionModifier extends SubdivisionModifier_1.SubdivisionModifier {
+    /**
+     * Constructs a new [[SphericalGeometrySubdivisionModifier]].
+     *
+     * @param angle - The maximum angle in radians between two vertices and the origin.
+     * @param projection - The projection that defines the world space of this geometry.
+     */
+    constructor(angle, projection = harp_geoutils_1.sphereProjection) {
+        super();
+        this.angle = angle;
+        this.projection = projection;
+    }
+    /** @override */
+    shouldSplitTriangle(a, b, c) {
+        const aa = harp_geoutils_1.sphereProjection.reprojectPoint(this.projection, a, VERTEX_POSITION_CACHE[0]);
+        const bb = harp_geoutils_1.sphereProjection.reprojectPoint(this.projection, b, VERTEX_POSITION_CACHE[1]);
+        const cc = harp_geoutils_1.sphereProjection.reprojectPoint(this.projection, c, VERTEX_POSITION_CACHE[2]);
+        const alpha = aa.angleTo(bb);
+        const beta = bb.angleTo(cc);
+        const gamma = cc.angleTo(aa);
+        // find the maximum angle
+        const m = Math.max(alpha, Math.max(beta, gamma));
+        // split the triangle if needed.
+        if (m < this.angle) {
+            return undefined;
+        }
+        if (m === alpha) {
+            return 0;
+        }
+        else if (m === beta) {
+            return 1;
+        }
+        else if (m === gamma) {
+            return 2;
+        }
+        throw new Error("failed to split triangle");
+    }
+}
+exports.SphericalGeometrySubdivisionModifier = SphericalGeometrySubdivisionModifier;
+//# sourceMappingURL=SphericalGeometrySubdivisionModifier.js.map
+
+/***/ }),
+
+/***/ "./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/SubdivisionModifier.js":
+/*!*******************************************************************************************************************!*\
+  !*** ./node_modules/@here/harp-vectortile-datasource/node_modules/@here/harp-geometry/lib/SubdivisionModifier.js ***!
+  \*******************************************************************************************************************/
+/***/ ((__unused_webpack_module, exports, __webpack_require__) => {
+
+"use strict";
+
+/*
+ * Copyright (C) 2019-2021 HERE Europe B.V.
+ * Licensed under Apache 2.0, see full license in LICENSE
+ * SPDX-License-Identifier: Apache-2.0
+ */
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.SubdivisionModifier = void 0;
+const three_1 = __webpack_require__(/*! three */ "three");
+const tmpVectorA = new three_1.Vector3();
+const tmpVectorB = new three_1.Vector3();
+const tmpVectorC = new three_1.Vector3();
+/**
+ * The [[SubdivisionModifier]] subdivides triangle mesh geometries.
+ */
+class SubdivisionModifier {
+    /**
+     * Constructs a new [[SubdivisionModifier]].
+     */
+    constructor() {
+        // nothing to do
+    }
+    /**
+     * Subdivides the faces of the given [[THREE.BufferGeometry]].
+     *
+     * This method modifies (in-place) the vertices and the faces of the geometry.
+     * Please note that only the vertex position and their UV coordinates are subdivided.
+     * Normals, vertex colors and other attributes are left unmodified.
+     *
+     * @param geometry - The [[THREE.BufferGeometry]] to subdivide.
+     */
+    modify(geometry) {
+        const positionAttr = geometry.getAttribute("position");
+        const position = Array.from(positionAttr.array);
+        const uvAttr = geometry.getAttribute("uv");
+        const uv = uvAttr !== undefined ? Array.from(uvAttr.array) : undefined;
+        const edgeAttr = geometry.getAttribute("edge");
+        const edge = edgeAttr !== undefined ? Array.from(edgeAttr.array) : undefined;
+        const wallAttr = geometry.getAttribute("wall");
+        const wall = wallAttr !== undefined ? Array.from(wallAttr.array) : undefined;
+        const indexAttr = geometry.getIndex();
+        const indices = Array.from(indexAttr.array);
+        // A cache containing the indices of the vertices added
+        // when subdiving the faces of the geometry.
+        const cache = new Map();
+        /**
+         * Returns the index of the vertex positioned in the middle of the given vertices.
+         */
+        function middleVertex(i, j) {
+            // Build a unique `key` for the pair of indices `(i, j)`.
+            const key = `${Math.min(i, j)}_${Math.max(i, j)}`;
+            const h = cache.get(key);
+            if (h !== undefined) {
+                // Nothing to do, a vertex in the middle of (i, j) was already created.
+                return h;
+            }
+            // The position of the new vertex.
+            tmpVectorA.set(position[i * 3], position[i * 3 + 1], position[i * 3 + 2]);
+            tmpVectorB.set(position[j * 3], position[j * 3 + 1], position[j * 3 + 2]);
+            tmpVectorC.lerpVectors(tmpVectorA, tmpVectorB, 0.5);
+            // The index of the new vertex.
+            const index = position.length / 3;
+            position.push(...tmpVectorC.toArray());
+            // Cache the position of the new vertex.
+            cache.set(key, index);
+            // The uvs of the new vertex.
+            if (uv !== undefined) {
+                tmpVectorA.set(uv[i * 2], uv[i * 2 + 1], 0);
+                tmpVectorB.set(uv[j * 2], uv[j * 2 + 1], 0);
+                tmpVectorC.lerpVectors(tmpVectorA, tmpVectorB, 0.5);
+                uv.push(tmpVectorC.x, tmpVectorC.y);
+            }
+            // The edge and wall attributes of the new vertex.
+            // If a new vertex has been introduced between i and j, connect the elements
+            // accordingly.
+            if (edge !== undefined) {
+                if (edge[i] === j) {
+                    edge.push(j);
+                    edge[i] = index;
+                }
+                else if (edge[j] === i) {
+                    edge.push(i);
+                    edge[j] = index;
+                }
+                else {
+                    edge.push(-1);
+                }
+            }
+            if (wall !== undefined) {
+                if (wall[i] === j) {
+                    wall.push(j);
+                    wall[i] = index;
+                }
+                else if (wall[j] === i) {
+                    wall.push(i);
+                    wall[j] = index;
+                }
+                else {
+                    wall.push(-1);
+                }
+            }
+            return index;
+        }
+        const newIndices = [];
+        while (indices.length >= 3) {
+            const v0 = indices.shift();
+            const v1 = indices.shift();
+            const v2 = indices.shift();
+            tmpVectorA.set(position[v0 * 3], position[v0 * 3 + 1], position[v0 * 3 + 2]);
+            tmpVectorB.set(position[v1 * 3], position[v1 * 3 + 1], position[v1 * 3 + 2]);
+            tmpVectorC.set(position[v2 * 3], position[v2 * 3 + 1], position[v2 * 3 + 2]);
+            const edgeToSplit = this.shouldSplitTriangle(tmpVectorA, tmpVectorB, tmpVectorC);
+            switch (edgeToSplit) {
+                case 0: {
+                    const v3 = middleVertex(v0, v1);
+                    indices.push(v0, v3, v2, v3, v1, v2);
+                    break;
+                }
+                case 1: {
+                    const v3 = middleVertex(v1, v2);
+                    indices.push(v0, v1, v3, v0, v3, v2);
+                    break;
+                }
+                case 2: {
+                    const v3 = middleVertex(v2, v0);
+                    indices.push(v0, v1, v3, v3, v1, v2);
+                    break;
+                }
+                case undefined: {
+                    newIndices.push(v0, v1, v2);
+                    break;
+                }
+                default:
+                    throw new Error("failed to subdivide the given geometry");
+            }
+        }
+        positionAttr.array =
+            positionAttr.array instanceof Float32Array
+                ? new Float32Array(position)
+                : new Float64Array(position);
+        positionAttr.count = position.length / positionAttr.itemSize;
+        positionAttr.needsUpdate = true;
+        geometry.setIndex(newIndices);
+        if (uv !== undefined) {
+            uvAttr.array = new Float32Array(uv);
+            uvAttr.count = uv.length / uvAttr.itemSize;
+            uvAttr.needsUpdate = true;
+        }
+        if (edge !== undefined) {
+            edgeAttr.array = new Float32Array(edge);
+            edgeAttr.count = edge.length / edgeAttr.itemSize;
+            edgeAttr.needsUpdate = true;
+        }
+        return geometry;
+    }
+}
+exports.SubdivisionModifier = SubdivisionModifier;
+//# sourceMappingURL=SubdivisionModifier.js.map
 
 /***/ }),
 
